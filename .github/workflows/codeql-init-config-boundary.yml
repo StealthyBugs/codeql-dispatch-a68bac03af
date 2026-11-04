@@ -1,0 +1,120 @@
+name: current CodeQL init config containment
+on:
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+  packages: read
+jobs:
+  init:
+    strategy:
+      fail-fast: false
+      max-parallel: 19
+      matrix:
+        include:
+          - case: regular
+            path: 'lower-data/cases/regular.yml'
+            outside: false
+          - case: safe-symlink
+            path: 'lower-data/cases/safe-link.yml'
+            outside: false
+          - case: nested-regular
+            path: 'lower-data/cases/regular-nested/config.yml'
+            outside: false
+          - case: absolute-leaf
+            path: 'lower-data/cases/absolute.yml'
+            outside: true
+          - case: relative-leaf
+            path: 'lower-data/cases/relative.yml'
+            outside: true
+          - case: leaf-chain
+            path: 'lower-data/cases/chain-a.yml'
+            outside: true
+          - case: parent-directory
+            path: 'lower-data/cases/dir-link/codeql-owner-protected.yml'
+            outside: true
+          - case: parent-directory-chain
+            path: 'lower-data/cases/dir-chain-a/codeql-owner-protected.yml'
+            outside: true
+          - case: dot-segment
+            path: 'lower-data/cases/./absolute.yml'
+            outside: true
+          - case: repeated-separator
+            path: 'lower-data/cases//absolute.yml'
+            outside: true
+          - case: parent-segment
+            path: 'lower-data/cases/nested/../absolute.yml'
+            outside: true
+          - case: percent-literal
+            path: 'lower-data/cases/%2e%2e.yml'
+            outside: true
+          - case: unicode-fullwidth
+            path: 'lower-data/cases/．．.yml'
+            outside: true
+          - case: backslash-name
+            path: 'lower-data/cases/back\slash.yml'
+            outside: true
+          - case: space-name
+            path: 'lower-data/cases/space name.yml'
+            outside: true
+          - case: deep-nested
+            path: 'lower-data/cases/nested/deep/link.yml'
+            outside: true
+          - case: dangling
+            path: 'lower-data/cases/dangling.yml'
+            outside: false
+          - case: symlink-loop
+            path: 'lower-data/cases/loop-a.yml'
+            outside: false
+          - case: directory-selected
+            path: 'lower-data/cases/dir-link'
+            outside: false
+    name: init-${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Owner-authored outside inert config
+        shell: bash
+        env:
+          MATRIX_CASE: ${{ matrix.case }}
+        run: |
+          python3 - <<'PYPRE'
+          import hashlib,json,os,pathlib,secrets
+          token='CODEQL_OWNER_PROTECTED_'+secrets.token_hex(32)
+          body='paths-ignore:\n  - "'+token+'/**"\n'
+          target=pathlib.Path.home()/'.config'/'codeql-owner-protected.yml'
+          target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body);target.chmod(0o600)
+          print('CQLLIVE_PRE='+json.dumps({'case':os.environ['MATRIX_CASE'],'canary_length':len(token),'canary_sha256':hashlib.sha256(token.encode()).hexdigest(),'config_length':len(body.encode()),'config_sha256':hashlib.sha256(body.encode()).hexdigest(),'target_present':target.is_file()},sort_keys=True,separators=(',',':')))
+          PYPRE
+      - name: Checkout lower data repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: test8177/codeql-data-a68bac03af
+          ref: 0e17edc1ff46c64b39a1702108fc23081c2733c9
+          path: lower-data
+          persist-credentials: false
+      - name: Exact current CodeQL init
+        id: init
+        continue-on-error: true
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          config-file: ${{ matrix.path }}
+      - name: Sanitized path and outcome readback
+        if: always()
+        shell: bash
+        env:
+          MATRIX_CASE: ${{ matrix.case }}
+          CONFIG_PATH: ${{ matrix.path }}
+          EXPECT_OUTSIDE: ${{ matrix.outside }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+        run: |
+          python3 - <<'PYPOST'
+          import hashlib,json,os,pathlib
+          path=pathlib.Path(os.environ['CONFIG_PATH']); workspace=pathlib.Path.cwd().resolve()
+          try: resolved=path.resolve(); resolve_error=None
+          except Exception as exc: resolved=None; resolve_error=type(exc).__name__
+          print('CQLLIVE_POST='+json.dumps({'case':os.environ['MATRIX_CASE'],'config_path_sha256':hashlib.sha256(os.environ['CONFIG_PATH'].encode()).hexdigest(),'expected_outside':os.environ['EXPECT_OUTSIDE']=='true','init_outcome':os.environ.get('INIT_OUTCOME'),'leaf_is_symlink':path.is_symlink(),'resolved_outside_workspace':bool(resolved and not str(resolved).startswith(str(workspace))),'resolve_error':resolve_error},sort_keys=True,separators=(',',':')))
+          PYPOST
